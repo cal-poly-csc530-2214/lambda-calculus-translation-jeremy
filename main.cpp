@@ -2,6 +2,7 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <sstream>
 
 namespace lexer {
 	enum class TokenType {
@@ -10,6 +11,7 @@ namespace lexer {
 		TIMES,
 		PLUS,
 		LAMBDA,
+		LAMBDA_ARROW,
 		ID,
 		NUM
 	};
@@ -29,6 +31,9 @@ namespace lexer {
 		Token& peek(size_t lookahead) {
 			return tokens[position+lookahead];
 		};
+		void back() {
+			position--;
+		}
 		void add(Token t) {
 			tokens.push_back(t);
 		};
@@ -75,8 +80,15 @@ namespace lexer {
 			}
 		},
 		[](const char* s, size_t& i, size_t len, TokenStream& ts) -> void {
+			if (i+1 < len && s[i] == '=' && s[i+1] == '>') {
+				Token t = {"=>", TokenType::LAMBDA_ARROW};
+				ts.add(t);
+				i+=2;
+			}
+		},
+		[](const char* s, size_t& i, size_t len, TokenStream& ts) -> void {
 			std::string value = "";
-			while (s[i] >= 'a' && s[i] <= 'z' && s[i] >= 'A' && s[i] <= 'Z') {
+			while ((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z')) {
 				value += s[i];
 				i++;
 			}
@@ -114,22 +126,165 @@ namespace lexer {
 			for (auto& m : matchers) {
 				m(s, i, len, *ts);
 			}
-			std::cout << i << ": " << input << std::endl;
 		}
 		std::move(ts);
 		return ts;
 	}
 };
 
+namespace parser {
+	class ASTNode {
+	public:
+		virtual ~ASTNode() {};
+		virtual void compile(std::stringstream& ss) = 0;
+	};
+	class Add : public ASTNode {
+	public:
+		Add(ASTNode *left, ASTNode *right):
+			left(left), right(right) {};
+		~Add() {
+			delete left;
+			delete right;
+		};
+		void compile(std::stringstream& ss) {
+			ss << "(";
+			left->compile(ss);
+			ss << ")+(";
+			right->compile(ss);
+			ss << ")";
+		};
+	private:
+		ASTNode *left, *right;	
+	};
+	class Times : public ASTNode {
+	public:
+		Times(ASTNode *left, ASTNode *right):
+			left(left), right(right) {};
+		~Times() {
+			delete left;
+			delete right;
+		};
+		void compile(std::stringstream& ss) {
+			ss << "(";
+			left->compile(ss);
+			ss << ")*(";
+			right->compile(ss);
+			ss << ")";
+		};
+	private:
+		ASTNode *left, *right;	
+	};
+	class Lambda : public ASTNode {
+	public:
+		Lambda(std::string paramName, ASTNode *body):
+			paramName(paramName), body(body) {};
+		~Lambda() {
+			delete body;
+		};
+		void compile(std::stringstream& ss) {
+			ss << paramName << " => (";
+			body->compile(ss);
+			ss << ")";
+		};
+	private:
+		std::string paramName;
+		ASTNode *body;	
+	};
+	class Apply : public ASTNode {
+	public:
+		Apply(ASTNode* func, ASTNode *arg):
+			func(func), arg(arg) {};
+		~Apply() {
+			delete func;
+			delete arg;
+		};
+		void compile(std::stringstream& ss) {
+			ss << "(";
+			func->compile(ss);
+			ss << ")(";
+			arg->compile(ss);
+			ss << ")"; 
+		};
+	private:
+		ASTNode *func, *arg;
+	};	
+	class VarRead : public ASTNode {
+	public:
+		VarRead(std::string name):
+			name(name) {};
+		~VarRead() {};
+		void compile(std::stringstream& ss) {
+			ss << name;
+		};
+	private:
+		std::string name;
+	};
+	class Constant : public ASTNode {
+	public:
+		Constant(std::string value):
+			value(value) {};
+		~Constant() {};
+		void compile(std::stringstream& ss) {
+			ss << value;
+		};
+	private:
+		std::string value;
+	};
+
+	ASTNode* parseBase(lexer::TokenStream& ts) {
+		if (ts.peek().type == lexer::TokenType::LPAREN) {
+			ts.next();
+			ASTNode* node;
+			auto& token = ts.next();
+			if (token.type == lexer::TokenType::PLUS) {
+				node = new Add(parseBase(ts), parseBase(ts));
+			}
+			else if (token.type == lexer::TokenType::TIMES) {
+				node = new Times(parseBase(ts), parseBase(ts));
+			
+			}
+			else if (token.type == lexer::TokenType::LAMBDA) {
+				assert(ts.peek().type == lexer::TokenType::ID);
+				auto param = ts.peek().value;
+				ts.next();
+				assert(ts.next().type == lexer::TokenType::LAMBDA_ARROW);
+				node = new Lambda(param, parseBase(ts));
+			}
+			else {
+				ts.back();
+				node = new Apply(parseBase(ts), parseBase(ts));	
+			}
+			ts.next(); // Skip ')'
+			return node;
+		}
+		else if (ts.peek().type == lexer::TokenType::ID) {
+			return new VarRead(ts.next().value);
+		}
+		else if (ts.peek().type == lexer::TokenType::NUM) {
+			return new Constant(ts.next().value);
+		}
+		else {
+			std::cout << ts.peek().value << std::endl;
+			assert(false);
+		}
+	};
+
+	std::unique_ptr<ASTNode> parse(lexer::TokenStream& ts) {
+		auto ast = std::unique_ptr<ASTNode>(parseBase(ts));
+		std::move(ast);
+		return ast;
+	};
+};
+
 int main() {
-	std::string input = "(+ 8 9)";
+	std::string input = "((/ x => x) 20)";
 
 	auto ts = lexer::lex(input);
-	std::cout << ts->peek().value << std::endl;
-	//auto ast = parser::parse(*ts);
-	//auto output = compiler::compile(*ast);
+	auto ast = parser::parse(*ts);
+	std::stringstream ss;
+	ast->compile(ss);
 	
-	//std::cout << output << std::endl;
+	std::cout << ss.str() << std::endl;
 
 	return 0;
 }
