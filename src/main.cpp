@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <sstream>
+#include <cassert>
 
 namespace lexer {
 	enum class TokenType {
@@ -88,26 +89,28 @@ namespace lexer {
 		},
 		[](const char* s, size_t& i, size_t len, TokenStream& ts) -> void {
 			std::string value = "";
-			while ((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z')) {
+			bool first_letter = true;
+			while (isalpha(s[i]) || (!first_letter && isdigit(s[i]))) {
 				value += s[i];
 				i++;
+				first_letter = false;
 			}
 			if (value.length()) {
 				Token t = {value, TokenType::ID};
 				ts.add(t);
-				i++;
 			}
 		},
 		[](const char* s, size_t& i, size_t len, TokenStream& ts) -> void {
 			std::string value = "";
-			while (s[i] >= '0' && s[i] <= '9') {
+			bool first_letter = true;
+			while ((first_letter && s[i] == '-') || isdigit(s[i])) {
 				value += s[i];
 				i++;
+				first_letter = false;
 			}
 			if (value.length()) {
 				Token t = {value, TokenType::NUM};
 				ts.add(t);
-				i++;
 			}
 		},
 		[](const char* s, size_t& i, size_t len, TokenStream& ts) -> void {
@@ -123,9 +126,15 @@ namespace lexer {
 		size_t i = 0;
 		size_t len = input.length();
 		while (i < len) {
+			int oldI = i;
 			for (auto& m : matchers) {
 				m(s, i, len, *ts);
 			}
+			if (i == oldI) {
+				std::cerr << "No matching token found at position " << i << std::endl;
+				std::cerr << input << std::endl;
+				exit(1);
+			} 
 		}
 		std::move(ts);
 		return ts;
@@ -192,7 +201,7 @@ namespace parser {
 	};
 	class Apply : public ASTNode {
 	public:
-		Apply(ASTNode* func, ASTNode *arg):
+		Apply(ASTNode* arg, ASTNode *func):
 			func(func), arg(arg) {};
 		~Apply() {
 			delete func;
@@ -230,6 +239,42 @@ namespace parser {
 	private:
 		std::string value;
 	};
+	class IfLeq0 : public ASTNode {
+	public:
+		IfLeq0(ASTNode* falseResult, ASTNode* trueResult, ASTNode* value) :
+			value(value), trueResult(trueResult), falseResult(falseResult) {};
+		~IfLeq0() {
+			delete value;
+			delete trueResult;
+			delete falseResult;
+		};
+		void compile(std::stringstream& ss) {
+			ss << "((";
+			value->compile(ss);
+			ss << ") <= 0) ? (";
+			trueResult->compile(ss);
+			ss << ") : (";
+			falseResult->compile(ss);
+			ss << ")";
+		};
+	private:
+		ASTNode* value, * trueResult, * falseResult;
+	};
+	class PrintLn : public ASTNode {
+	public:
+		PrintLn(ASTNode* message) :
+			message(message) {};
+		~PrintLn() {
+			delete message;
+		};
+		void compile(std::stringstream& ss) {
+			ss << "(x => {console.log(x); return x;})(";
+			message->compile(ss);
+			ss << ")";
+		};
+	private:
+		ASTNode* message;
+	};
 
 	ASTNode* parseBase(lexer::TokenStream& ts) {
 		if (ts.peek().type == lexer::TokenType::LPAREN) {
@@ -252,6 +297,20 @@ namespace parser {
 			}
 			else {
 				ts.back();
+				if (ts.peek().type == lexer::TokenType::ID) {
+					if (ts.peek().value == "ifleq0") {
+						ts.next();
+						node = new IfLeq0(parseBase(ts), parseBase(ts), parseBase(ts));
+						ts.next(); // Skip ')'
+						return node;
+					}
+					else if (ts.peek().value == "println") {
+						ts.next();
+						node = new PrintLn(parseBase(ts));
+						ts.next(); // Skip ')'
+						return node;
+					}
+				}
 				node = new Apply(parseBase(ts), parseBase(ts));	
 			}
 			ts.next(); // Skip ')'
@@ -277,13 +336,14 @@ namespace parser {
 };
 
 int main() {
-	std::string input = "((/ x => x) 20)";
+	std::string input = "((/ x => (ifleq0 (+ x -10) x (println -1))) 20)";
 
 	auto ts = lexer::lex(input);
 	auto ast = parser::parse(*ts);
 	std::stringstream ss;
 	ast->compile(ss);
-	
+
+	std::cout << "JavaScript Output: \n";
 	std::cout << ss.str() << std::endl;
 
 	return 0;
