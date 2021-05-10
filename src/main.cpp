@@ -209,9 +209,9 @@ namespace parser {
 		};
 		void compile(std::stringstream& ss) {
 			ss << "(";
-			func->compile(ss);
-			ss << ")(";
 			arg->compile(ss);
+			ss << ")(";
+			func->compile(ss);
 			ss << ")"; 
 		};
 	private:
