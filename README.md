@@ -14,3 +14,7 @@ I then tested the output in my web browser for a few different examples (such as
 ```
 ((/ x => (ifleq0 (+ x -10) x (println -1))) 20)
 ```
+outputs
+```
+(x => ((((x => {console.log(x); return x;})(-1)) <= 0) ? (x) : ((x)+(-10))))(20)
+```
